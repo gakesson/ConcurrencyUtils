@@ -38,13 +38,11 @@ import java.util.concurrent.locks.ReentrantLock;
  * <br/>
  * 
  * @author Gustav Akesson - gustav.r.akesson@gmail.com
- *
  * @param <E>
  *            The type of elements held in this {@link BoundedPriorityBlockingQueue}
  * 
  * @see {@link PriorityBlockingQueue}
  * @see {@link ArrayBlockingQueue}
- * 
  */
 public class BoundedPriorityBlockingQueue<E> extends AbstractQueue<E> implements BlockingQueue<E>
 {
@@ -589,33 +587,7 @@ public class BoundedPriorityBlockingQueue<E> extends AbstractQueue<E> implements
     @Override
     public int drainTo(Collection<? super E> collectionToDrainTo)
     {
-        checkNotNull(collectionToDrainTo);
-        checkNotSame(collectionToDrainTo, this);
-        int numberOfDrainedElements = 0;
-        myLock.lock();
-
-        try
-        {
-            E drainedElement = extractElementWithoutSignalingWaitingThread();
-
-            while (drainedElement != null)
-            {
-                collectionToDrainTo.add(drainedElement);
-                ++numberOfDrainedElements;
-                drainedElement = extractElementWithoutSignalingWaitingThread();
-            }
-
-            if (numberOfDrainedElements > 0)
-            {
-                myNotFull.signalAll();
-            }
-        }
-        finally
-        {
-            myLock.unlock();
-        }
-
-        return numberOfDrainedElements;
+    	return drainTo(collectionToDrainTo, Integer.MAX_VALUE);
     }
 
     /**
