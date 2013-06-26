@@ -37,7 +37,8 @@ import java.util.concurrent.locks.ReentrantLock;
  * enforce an ordering, by e.g. defining custom classes or comparators that use a secondary key to break ties in primary priority values.<br/>
  * <br/>
  * 
- * @author Gustav Åkesson - gustav.r.akesson@gmail.com
+ * @author Gustav Akesson - gustav.r.akesson@gmail.com
+ *
  * @param <E>
  *            The type of elements held in this {@link BoundedPriorityBlockingQueue}
  * 
