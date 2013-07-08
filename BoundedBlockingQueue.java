@@ -142,17 +142,9 @@ public class BoundedBlockingQueue<E> extends AbstractQueue<E> implements Blockin
 
         try
         {
-            try
+            while (myBackingQueue.isEmpty())
             {
-                while (myBackingQueue.isEmpty())
-                {
-                    myNotEmpty.await();
-                }
-            }
-            catch (InterruptedException ie)
-            {
-                myNotEmpty.signal();
-                throw ie;
+                myNotEmpty.await();
             }
 
             E element = myBackingQueue.poll();
@@ -183,17 +175,9 @@ public class BoundedBlockingQueue<E> extends AbstractQueue<E> implements Blockin
 
         try
         {
-            try
+            while (myBackingQueue.size() == myCapacity)
             {
-                while (myBackingQueue.size() == myCapacity)
-                {
-                    myNotFull.await();
-                }
-            }
-            catch (InterruptedException ie)
-            {
-                myNotFull.signal();
-                throw ie;
+                myNotFull.await();
             }
 
           	myBackingQueue.add(element);
@@ -276,24 +260,16 @@ public class BoundedBlockingQueue<E> extends AbstractQueue<E> implements Blockin
                     if (inserted)
                     {
                         myNotEmpty.signal();
+                        return inserted;
                     }
-
-                    return inserted;
                 }
-                else if (nanos <= 0)
+                
+                if (nanos <= 0)
                 {
                     return false;
                 }
 
-                try
-                {
-                    nanos = myNotFull.awaitNanos(nanos);
-                }
-                catch (InterruptedException ie)
-                {
-                    myNotFull.signal();
-                    throw ie;
-                }
+                nanos = myNotFull.awaitNanos(nanos);
             }
         }
         finally
@@ -356,20 +332,13 @@ public class BoundedBlockingQueue<E> extends AbstractQueue<E> implements Blockin
                     myNotFull.signal();
                     return element;
                 }
-                else if (nanos <= 0)
+                
+                if (nanos <= 0)
                 {
                     return null;
                 }
-
-                try
-                {
-                    nanos = myNotEmpty.awaitNanos(nanos);
-                }
-                catch (InterruptedException ie)
-                {
-                    myNotEmpty.signal();
-                    throw ie;
-                }
+                
+                nanos = myNotEmpty.awaitNanos(nanos);
             }
         }
         finally
