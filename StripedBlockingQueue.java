@@ -495,7 +495,7 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
     /**
      * Returns the number of additional elements that this queue can ideally (in
      * the absence of memory constraints) accept without blocking. This is
-     * always equal to the total capacity of this queue less the current current
+     * always equal to the total capacity of this queue less the current
      * of this queue.
      * 
      * @return The remaining capacity.
