@@ -1,6 +1,7 @@
 package gakesson.util.concurrent;
 
 import static org.fest.assertions.Assertions.assertThat;
+import gakesson.util.misc.Stack;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -25,7 +26,7 @@ public class NonBlockingStackTest
     @Test
     public void shouldPushElement()
     {
-        NonBlockingStack<Element> stack = new NonBlockingStack<Element>();
+        Stack<Element> stack = new NonBlockingStack<Element>();
 
         Element element = new Element();
         stack.push(element);
@@ -37,7 +38,7 @@ public class NonBlockingStackTest
     public void shouldPushAndPopElementsInLIFO()
     {
         int numberOfElements = 100;
-        NonBlockingStack<Element> stack = new NonBlockingStack<Element>();
+        Stack<Element> stack = new NonBlockingStack<Element>();
         List<Element> elements = createAndPushElements(numberOfElements, stack);
         int reverseIndex = elements.size() - 1;
 
@@ -52,7 +53,7 @@ public class NonBlockingStackTest
     public void shouldReturnCorrectSizeOfStack()
     {
         int numberOfElements = 100;
-        NonBlockingStack<Element> stack = new NonBlockingStack<Element>();
+        Stack<Element> stack = new NonBlockingStack<Element>();
         createAndPushElements(numberOfElements, stack);
 
         assertThat(stack.size()).isEqualTo(numberOfElements);
@@ -61,7 +62,7 @@ public class NonBlockingStackTest
     @Test
     public void shouldReturnZeroSizeWhenStackIsEmpty()
     {
-        NonBlockingStack<Element> stack = new NonBlockingStack<Element>();
+        Stack<Element> stack = new NonBlockingStack<Element>();
 
         assertThat(stack.size()).isZero();
     }
@@ -69,7 +70,7 @@ public class NonBlockingStackTest
     @Test
     public void shouldReturnIsEmptyWhenStackHasNoElements()
     {
-        NonBlockingStack<Element> stack = new NonBlockingStack<Element>();
+        Stack<Element> stack = new NonBlockingStack<Element>();
 
         assertThat(stack.isEmpty()).isTrue();
     }
@@ -78,7 +79,7 @@ public class NonBlockingStackTest
     public void shouldNotReturnIsEmptyWhenStackHasElements()
     {
         int numberOfElements = 100;
-        NonBlockingStack<Element> stack = new NonBlockingStack<Element>();
+        Stack<Element> stack = new NonBlockingStack<Element>();
         createAndPushElements(numberOfElements, stack);
 
         assertThat(stack.isEmpty()).isFalse();
@@ -88,7 +89,7 @@ public class NonBlockingStackTest
     public void concurrentShouldPushAndPopElements() throws Exception
     {
         final int numberOfElements = 10000;
-        final NonBlockingStack<Element> stack = new NonBlockingStack<Element>();
+        final Stack<Element> stack = new NonBlockingStack<Element>();
         ExecutorService executor = Executors.newCachedThreadPool();
         int parallelism = 20;
         final CountDownLatch resultBarrier = new CountDownLatch(parallelism);
@@ -136,7 +137,7 @@ public class NonBlockingStackTest
         executor.shutdownNow();
     }
 
-    private List<Element> createAndPushElements(int numberOfElements, NonBlockingStack<Element> stack)
+    private List<Element> createAndPushElements(int numberOfElements, Stack<Element> stack)
     {
         List<Element> createdElements = new ArrayList<Element>(numberOfElements);
 

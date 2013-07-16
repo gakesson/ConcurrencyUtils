@@ -1,5 +1,7 @@
 package gakesson.util.concurrent;
 
+import gakesson.util.misc.Stack;
+
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -12,16 +14,11 @@ import java.util.concurrent.atomic.AtomicReference;
  * @param <E>
  *            The type of elements held in this collection.
  */
-public class NonBlockingStack<E>
+public class NonBlockingStack<E> implements Stack<E>
 {
     private final AtomicReference<Node> myTop = new AtomicReference<Node>();
 
-    /**
-     * Pushes the provided element on top of this stack.
-     * 
-     * @param e
-     *            The element to push.
-     */
+    @Override
     public void push(E e)
     {
         boolean continuePush = true;
@@ -34,13 +31,7 @@ public class NonBlockingStack<E>
         }
     }
 
-    /**
-     * Returns and removes the top of this stack, or {@code null} if the stack
-     * is empty.
-     * 
-     * @return The element at the top of this stack, or {@code null} if the
-     *         stack is empty.
-     */
+    @Override
     public E pop()
     {
         boolean continuePop = true;
@@ -63,25 +54,14 @@ public class NonBlockingStack<E>
         return topElement;
     }
 
-    /**
-     * Returns, but does not remove, the top of this stack, or {@code null} if
-     * the stack is empty.
-     * 
-     * @return The element at the top of this stack, or {@code null} if the
-     *         stack is empty.
-     */
+    @Override
     public E peek()
     {
         Node top = myTop.get();
         return top == null ? null : top.getElement();
     }
 
-    /**
-     * Verifies whether or not this stack is empty. This method is constant in
-     * time.
-     * 
-     * @return
-     */
+    @Override
     public boolean isEmpty()
     {
         return myTop.get() == null;
@@ -94,6 +74,7 @@ public class NonBlockingStack<E>
      * 
      * @return The size of this stack.
      */
+    @Override
     public int size()
     {
         Node currentNode = myTop.get();
