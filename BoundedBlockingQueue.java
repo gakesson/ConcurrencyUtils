@@ -705,6 +705,7 @@ public class BoundedBlockingQueue<E> extends AbstractQueue<E> implements Blockin
         }
 
         @Override
+        @SuppressWarnings("unchecked")
         public E next()
         {
             if (myCurrentIndex >= myArray.length)

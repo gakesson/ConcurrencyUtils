@@ -4,6 +4,7 @@ import java.lang.reflect.Array;
 import java.util.AbstractQueue;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.ConcurrentModificationException;
@@ -73,19 +74,13 @@ import java.util.concurrent.locks.ReentrantLock;
  *            The type of elements held in this collection (must be of type
  *            {@link StripedQueueElement}).
  */
-public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
-        BlockingQueue<E>
+public class StripedBlockingQueue<E extends StripedQueueElement> extends AbstractQueue<E> implements BlockingQueue<E>
 {
     /*
      * The fixed length of the priority sequence to circulate when consuming
      * elements.
      */
     private static final int PRIORITY_SEQUENCE_LENGTH = 10;
-
-    /*
-     * The access policy of this queue.
-     */
-    private final boolean myAccessPolicy;
 
     /*
      * The lock used to access this queue.
@@ -112,10 +107,26 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
      */
     private int myCurrentSize = 0;
 
+    private final static class Lane<E> extends ArrayDeque<E>
+    {
+      private final int index;
+
+      Lane(final int initialCapacity, final int index)
+      {
+        super(initialCapacity);
+        this.index = index;
+      }
+
+      final int getIndex()
+      {
+        return index;
+      }
+    };
+
     /*
      * The queues identified by the defined priority levels.
      */
-    private final EnumMap<?, ArrayDeque<E>> myQueues;
+    private final EnumMap<?, Lane<E>> myQueues;
 
     /*
      * The priority sequence, i.e. the sequence used to determine how many
@@ -123,13 +134,6 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
      * to the next one.
      */
     private final Enum<?>[] myPrioritySequence;
-
-    /*
-     * A data structure with each priority and the corresponding end-index in
-     * the priority sequence. This is used as an optimization in order to find
-     * an element to extract.
-     */
-    private final EnumMap<?, Integer> myPrioritiesWithEndSequenceIndexes;
 
     /*
      * A counter to used for circulating the defined priority levels.
@@ -205,46 +209,43 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
      * @throws IllegalArgumentException
      *             In case any input is illegal.
      */
+    @SuppressWarnings("unchecked")
     public <T extends Enum<T>> StripedBlockingQueue(
             EnumMap<T, Integer> weightsPerPriority, int initialQueueCapacities,
             int totalCapacity, boolean fair)
     {
         checkWeightsPerPriority(weightsPerPriority);
 
-        myAccessPolicy = fair;
-        myAccessLock = new ReentrantLock(myAccessPolicy);
+        myAccessLock = new ReentrantLock(fair);
         myNotEmpty = myAccessLock.newCondition();
         myNotFull = myAccessLock.newCondition();
 
         myTotalCapacity = totalCapacity;
 
-        Class<T> priorityType = (Class<T>) weightsPerPriority.keySet()
-                .iterator().next().getClass();
-        EnumMap<T, ArrayDeque<E>> queues = new EnumMap<T, ArrayDeque<E>>(
-                priorityType);
-        EnumMap<T, Integer> prioritiesWithEndSequenceIndexes = new EnumMap<T, Integer>(
-                priorityType);
-        Enum<?>[] prioritySequence = new Enum<?>[PRIORITY_SEQUENCE_LENGTH];
+        final Class<T> priorityType = (Class<T>) weightsPerPriority.keySet().
+                                                 iterator().next().getClass();
+        final EnumMap<T, Lane<E>> queues = new EnumMap<T, Lane<E>>(priorityType);
+        final Enum<?>[] prioritySequence = new Enum<?>[PRIORITY_SEQUENCE_LENGTH];
         int prioritySequenceCounter = 0;
 
-        for (Entry<T, Integer> entry : weightsPerPriority.entrySet())
+        for (final Entry<T, Integer> entry : weightsPerPriority.entrySet())
         {
-            T priority = entry.getKey();
-            int weightPerPriority = entry.getValue() / 10;
-            queues.put(priority, new ArrayDeque<E>(initialQueueCapacities));
+            final T priority = entry.getKey();
 
-            for (int i = 0; i < weightPerPriority; ++i)
             {
-                prioritySequence[prioritySequenceCounter++] = priority;
+              final int weightPerPriority = entry.getValue() / 10;
+              Arrays.fill(prioritySequence,
+                          prioritySequenceCounter,
+                          prioritySequenceCounter + weightPerPriority,
+                          priority);
+              prioritySequenceCounter += weightPerPriority;
             }
 
-            prioritiesWithEndSequenceIndexes.put(priority,
-                    prioritySequenceCounter - 1);
+            queues.put(priority, new Lane<E>(initialQueueCapacities, prioritySequenceCounter - 1));
         }
 
         myQueues = queues;
         myPrioritySequence = prioritySequence;
-        myPrioritiesWithEndSequenceIndexes = prioritiesWithEndSequenceIndexes;
     }
 
     /**
@@ -262,7 +263,7 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
     @Override
     public void put(E e) throws InterruptedException
     {
-        Enum<?> elementPriority = getQueueElement(e).getElementPriority();
+        Enum<?> elementPriority = e.getElementPriority();
         myAccessLock.lockInterruptibly();
 
         try
@@ -273,7 +274,8 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
             }
 
             insertElement(e, elementPriority);
-        } finally
+        }
+        finally
         {
             myAccessLock.unlock();
         }
@@ -294,7 +296,7 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
     @Override
     public boolean offer(E e)
     {
-        Enum<?> elementPriority = getQueueElement(e).getElementPriority();
+        Enum<?> elementPriority = e.getElementPriority();
         myAccessLock.lock();
 
         try
@@ -304,7 +306,8 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
                 insertElement(e, elementPriority);
                 return true;
             }
-        } finally
+        }
+        finally
         {
             myAccessLock.unlock();
         }
@@ -336,31 +339,26 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
     public boolean offer(E e, long timeout, TimeUnit unit)
             throws InterruptedException
     {
-        Enum<?> elementPriority = getQueueElement(e).getElementPriority();
+        Enum<?> elementPriority = e.getElementPriority();
         long nanos = unit.toNanos(timeout);
         myAccessLock.lockInterruptibly();
 
         try
         {
-            for (;;)
+            do
             {
                 if (myCurrentSize < myTotalCapacity)
                 {
                     insertElement(e, elementPriority);
                     return true;
                 }
-
-                if (nanos <= 0)
-                {
-                    return false;
-                }
-
-                nanos = myNotFull.awaitNanos(nanos);
-            }
-        } finally
+            } while ((nanos = myNotFull.awaitNanos(nanos)) > 0);
+        }
+        finally
         {
             myAccessLock.unlock();
         }
+        return false;
     }
 
     /**
@@ -384,7 +382,8 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
             }
 
             return extractElement();
-        } finally
+        }
+        finally
         {
             myAccessLock.unlock();
         }
@@ -404,7 +403,8 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
         try
         {
             return myCurrentSize > 0 ? extractElement() : null;
-        } finally
+        }
+        finally
         {
             myAccessLock.unlock();
         }
@@ -433,24 +433,19 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
 
         try
         {
-            for (;;)
+            do
             {
                 if (myCurrentSize > 0)
                 {
                     return extractElement();
                 }
-
-                if (nanos <= 0)
-                {
-                    return null;
-                }
-
-                nanos = myNotEmpty.awaitNanos(nanos);
-            }
-        } finally
+            } while((nanos = myNotEmpty.awaitNanos(nanos)) > 0);
+        }
+        finally
         {
             myAccessLock.unlock();
         }
+        return null;
     }
 
     /**
@@ -467,7 +462,8 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
         try
         {
             return myCurrentSize > 0 ? peekElement() : null;
-        } finally
+        }
+        finally
         {
             myAccessLock.unlock();
         }
@@ -486,7 +482,8 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
         try
         {
             return myCurrentSize;
-        } finally
+        }
+        finally
         {
             myAccessLock.unlock();
         }
@@ -503,7 +500,12 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
     @Override
     public int remainingCapacity()
     {
-        return myTotalCapacity - myCurrentSize;
+        myAccessLock.lock();
+        try {
+            return myTotalCapacity - myCurrentSize;
+        } finally {
+            myAccessLock.unlock();
+        }
     }
 
     /**
@@ -538,7 +540,7 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
 
         try
         {
-            for (ArrayDeque<E> queue : myQueues.values())
+            for (Lane<E> queue : myQueues.values())
             {
                 if (queue.remove(o))
                 {
@@ -571,7 +573,7 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
 
         try
         {
-            for (ArrayDeque<E> queue : myQueues.values())
+            for (Lane<E> queue : myQueues.values())
             {
                 if (queue.contains(object))
                 {
@@ -720,7 +722,7 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
     {
         List<Object[]> arraysToConcatenate = Collections.emptyList();
         myAccessLock.lock();
-        int currentSize = myCurrentSize;
+        final int currentSize = myCurrentSize;
 
         try
         {
@@ -757,18 +759,19 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
      *             of the runtime type of every element in this queue.
      */
     @Override
+    @SuppressWarnings("unchecked")
     public <T> T[] toArray(T[] a)
     {
+        checkNotNull(a);
         List<Object[]> arraysToConcatenate = Collections.emptyList();
         myAccessLock.lock();
-        int currentSize = myCurrentSize;
+        final int currentSize = myCurrentSize;
 
         try
         {
             if (a.length < currentSize)
             {
-                a = (T[]) Array.newInstance(a.getClass().getComponentType(),
-                        currentSize);
+                a = (T[]) Array.newInstance(a.getClass().getComponentType(), currentSize);
             }
 
             arraysToConcatenate = getQueuesAsArrays();
@@ -813,9 +816,9 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
      */
     private ArrayList<Object[]> getQueuesAsArrays()
     {
-        ArrayList<Object[]> arraysToConcatenate = new ArrayList<Object[]>();
+        ArrayList<Object[]> arraysToConcatenate = new ArrayList<Object[]>(myQueues.size());
 
-        for (ArrayDeque<E> queue : myQueues.values())
+        for (Lane<E> queue : myQueues.values())
         {
             arraysToConcatenate.add(queue.toArray());
         }
@@ -830,7 +833,7 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
      * @param arraysToConcatenate
      * @param destination
      */
-    private static <T> void concatenateArrays(List<T[]> arraysToConcatenate,
+    private static <T> void concatenateArrays(Iterable<T[]> arraysToConcatenate,
             T[] destination)
     {
         int nextStartIndexToUse = 0;
@@ -853,8 +856,7 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
      */
     private void insertElement(E element, Enum<?> elementPriority)
     {
-        ArrayDeque<E> queue = myQueues.get(elementPriority);
-        queue.addLast(element);
+        myQueues.get(elementPriority).addLast(element);
         ++myCurrentSize;
         myNotEmpty.signal();
     }
@@ -870,11 +872,10 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
      */
     private E extractElement()
     {
-        for (int i = 0; i < myPrioritiesWithEndSequenceIndexes.size(); ++i)
+        for (int i = 0; i < myQueues.size(); ++i)
         {
-            Enum<?> currentPriorityToPoll = myPrioritySequence[myPriorityCirculation];
-            ArrayDeque<E> queue = myQueues.get(currentPriorityToPoll);
-            E element = queue.poll();
+            final Lane<E> queue = myQueues.get(myPrioritySequence[myPriorityCirculation]);
+            final E element = queue.poll();
 
             if (element != null)
             {
@@ -882,11 +883,10 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
                 --myCurrentSize;
                 myNotFull.signal();
                 return element;
+            } else
+            {
+                myPriorityCirculation = stepPriorityCirculationToNextLevel(queue.getIndex());
             }
-
-            int currentlyPolledPriorityEndIndex = myPrioritiesWithEndSequenceIndexes
-                    .get(currentPriorityToPoll);
-            myPriorityCirculation = stepPriorityCirculationToNextLevel(currentlyPolledPriorityEndIndex);
         }
 
         // Must never reach this point - caller must make sure elements exist in
@@ -905,20 +905,19 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
     private E peekElement()
     {
         int priorityCirculation = myPriorityCirculation;
-        for (int i = 0; i < myPrioritiesWithEndSequenceIndexes.size(); ++i)
+        for (int i = 0; i < myQueues.size(); ++i)
         {
-            Enum<?> currentPriorityToPoll = myPrioritySequence[priorityCirculation];
-            ArrayDeque<E> queue = myQueues.get(currentPriorityToPoll);
-            E element = queue.poll();
+            final Lane<E> queue = myQueues.get(myPrioritySequence[priorityCirculation]);
+            final E element = queue.peek();
 
             if (element != null)
             {
                 return element;
             }
-
-            int currentlyPolledPriorityEndIndex = myPrioritiesWithEndSequenceIndexes
-                    .get(currentPriorityToPoll);
-            priorityCirculation = stepPriorityCirculationToNextLevel(currentlyPolledPriorityEndIndex);
+            else
+            {
+                priorityCirculation = stepPriorityCirculationToNextLevel(queue.getIndex());
+            }
         }
 
         // Must never reach this point - caller must make sure elements exist in
@@ -933,10 +932,9 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
      * @param currentPriorityCirculatioValue
      */
     private static int stepPriorityCirculation(
-            int currentPriorityCirculatioValue)
+            int currentPriorityCirculationValue)
     {
-        return (++currentPriorityCirculatioValue == PRIORITY_SEQUENCE_LENGTH) ? 0
-                : currentPriorityCirculatioValue;
+        return (++currentPriorityCirculationValue == PRIORITY_SEQUENCE_LENGTH) ? 0 : currentPriorityCirculationValue;
     }
 
     /**
@@ -948,20 +946,7 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
     private static int stepPriorityCirculationToNextLevel(
             int currentlyPolledPriorityEndIndex)
     {
-        return (currentlyPolledPriorityEndIndex == (PRIORITY_SEQUENCE_LENGTH - 1)) ? 0
-                : (currentlyPolledPriorityEndIndex + 1);
-    }
-
-    /**
-     * Casts the provided object into a {@link StripedQueueElement}, or throws a
-     * {@link ClassCastException} if not possible.
-     * 
-     * @param o
-     * @return
-     */
-    private static StripedQueueElement getQueueElement(Object o)
-    {
-        return (StripedQueueElement) o;
+        return (currentlyPolledPriorityEndIndex == (PRIORITY_SEQUENCE_LENGTH - 1)) ? 0 : (currentlyPolledPriorityEndIndex + 1);
     }
 
     /**
@@ -1019,6 +1004,11 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
                         + " must be expressed in tenth(s) of percent (not "
                         + weight + "%)");
             }
+            else if (weight < 0)
+            {
+                throw new IllegalArgumentException("Weight for" + priority
+                       + " must be non-negative but is " + weight + "%");
+            }
 
             sum += weight;
         }
@@ -1061,6 +1051,7 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
         }
 
         @Override
+        @SuppressWarnings("unchecked")
         public E next()
         {
             if (myCurrentIndex >= myArray.length)
@@ -1079,7 +1070,7 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
             {
                 throw new IllegalStateException();
             }
-
+            // This is broken, this needs to remove by index, if the same item is in the queue multiple times?
             removeElementByIdentity(myArray[myPreviousIndex]);
             myPreviousIndex = NO_INDEX;
         }
@@ -1096,7 +1087,7 @@ public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
 
             try
             {
-                queueLoop: for (ArrayDeque<E> queue : myQueues.values())
+                queueLoop: for (Lane<E> queue : myQueues.values())
                 {
                     Iterator<E> iterator = queue.iterator();
 
