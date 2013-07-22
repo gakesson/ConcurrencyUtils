@@ -12,7 +12,6 @@ import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
-import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
@@ -417,8 +416,8 @@ public class StripedBlockingQueueTest
         iterator.next();
     }
 
-    @Test(expectedExceptions = IllegalStateException.class)
-    public void shouldThrowIllegalStateExceptionWhenAttemptingToInvokeRemoveOnCompletelyNewIterator()
+    @Test(expectedExceptions = UnsupportedOperationException.class)
+    public void shouldThrowUnsupportedOperationExceptionWhenRemovingElementUsingIterator()
     {
         EnumMap<QueuePriority, Integer> weightPerPriority = createDefaultWeightPerPriority();
         StripedBlockingQueue<Element> queue = new StripedBlockingQueue<Element>(
@@ -426,30 +425,8 @@ public class StripedBlockingQueueTest
         verifyAndOfferAllElementsForAllPriorities(queue, QUEUE_CAPACITY);
 
         Iterator<Element> iterator = queue.iterator();
+        iterator.next();
         iterator.remove();
-    }
-
-    @Test
-    public void shouldRemoveElementsFromQueueUsingIterator()
-    {
-        EnumMap<QueuePriority, Integer> weightPerPriority = createDefaultWeightPerPriority();
-        StripedBlockingQueue<Element> queue = new StripedBlockingQueue<Element>(
-                weightPerPriority, QUEUE_CAPACITY);
-        verifyAndOfferAllElementsForAllPriorities(queue, QUEUE_CAPACITY);
-
-        Iterator<Element> iterator = queue.iterator();
-        int numberOfIteratedElements = 0;
-
-        while (iterator.hasNext())
-        {
-            numberOfIteratedElements++;
-            iterator.next();
-            iterator.remove();
-        }
-
-        assertThat(numberOfIteratedElements).isEqualTo(
-                calculateSizeWhenQueuesInAllPrioritiesAreFull());
-        assertThat(queue).isEmpty();
     }
 
     @Test
@@ -803,32 +780,6 @@ public class StripedBlockingQueueTest
     }
 
     @Test
-    public void shouldOfferElementToFullQueueUntilAnotherElementIsRemovedUsingIterator()
-            throws Exception
-    {
-        EnumMap<QueuePriority, Integer> weightPerPriority = createDefaultWeightPerPriority();
-        final BlockingQueue<Element> queue = new StripedBlockingQueue<Element>(
-                weightPerPriority, QUEUE_CAPACITY);
-        verifyAndOfferAllElementsForAllPriorities(queue, QUEUE_CAPACITY);
-        ExecutionInjection executionToEnableSpace = new ExecutionInjection()
-        {
-            @Override
-            public void apply()
-            {
-                Iterator<Element> iterator = queue.iterator();
-                iterator.next();
-                iterator.remove();
-            }
-        };
-
-        assertThat(queue).hasSize(
-                calculateSizeWhenQueuesInAllPrioritiesAreFull());
-
-        concurentPerformOfferElementUntilSpaceIsAvailable(
-                executionToEnableSpace, queue);
-    }
-
-    @Test
     public void shouldOfferElementToFullQueueUntilAnotherElementIsPolled()
             throws Exception
     {
@@ -1000,32 +951,6 @@ public class StripedBlockingQueueTest
             public void apply()
             {
                 queue.remove(firstElement);
-            }
-        };
-
-        assertThat(queue).hasSize(
-                calculateSizeWhenQueuesInAllPrioritiesAreFull());
-
-        concurrentPerformPutElementUntilSpaceIsAvailable(
-                executionToEnableSpace, queue);
-    }
-
-    @Test
-    public void shouldPutElementToFullQueueUntilAnotherElementIsRemovedUsingIterator()
-            throws Exception
-    {
-        EnumMap<QueuePriority, Integer> weightPerPriority = createDefaultWeightPerPriority();
-        final BlockingQueue<Element> queue = new StripedBlockingQueue<Element>(
-                weightPerPriority, QUEUE_CAPACITY);
-        verifyAndOfferAllElementsForAllPriorities(queue, QUEUE_CAPACITY);
-        ExecutionInjection executionToEnableSpace = new ExecutionInjection()
-        {
-            @Override
-            public void apply()
-            {
-                Iterator<Element> iterator = queue.iterator();
-                iterator.next();
-                iterator.remove();
             }
         };
 

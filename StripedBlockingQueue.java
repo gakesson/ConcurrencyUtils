@@ -74,7 +74,8 @@ import java.util.concurrent.locks.ReentrantLock;
  *            The type of elements held in this collection (must be of type
  *            {@link StripedQueueElement}).
  */
-public class StripedBlockingQueue<E extends StripedQueueElement> extends AbstractQueue<E> implements BlockingQueue<E>
+public class StripedBlockingQueue<E> extends AbstractQueue<E> implements
+        BlockingQueue<E>
 {
     /*
      * The fixed length of the priority sequence to circulate when consuming
@@ -107,26 +108,10 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
      */
     private int myCurrentSize = 0;
 
-    private final static class Lane<E> extends ArrayDeque<E>
-    {
-      private final int index;
-
-      Lane(final int initialCapacity, final int index)
-      {
-        super(initialCapacity);
-        this.index = index;
-      }
-
-      final int getIndex()
-      {
-        return index;
-      }
-    };
-
     /*
-     * The queues identified by the defined priority levels.
+     * The stripes identified by the defined priority levels.
      */
-    private final EnumMap<?, Lane<E>> myQueues;
+    private final EnumMap<?, Stripe<E>> myStripes;
 
     /*
      * The priority sequence, i.e. the sequence used to determine how many
@@ -222,29 +207,25 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
 
         myTotalCapacity = totalCapacity;
 
-        final Class<T> priorityType = (Class<T>) weightsPerPriority.keySet().
-                                                 iterator().next().getClass();
-        final EnumMap<T, Lane<E>> queues = new EnumMap<T, Lane<E>>(priorityType);
-        final Enum<?>[] prioritySequence = new Enum<?>[PRIORITY_SEQUENCE_LENGTH];
+        Class<T> priorityType = (Class<T>) weightsPerPriority.keySet()
+                .iterator().next().getClass();
+        EnumMap<T, Stripe<E>> stripes = new EnumMap<T, Stripe<E>>(priorityType);
+        Enum<?>[] prioritySequence = new Enum<?>[PRIORITY_SEQUENCE_LENGTH];
         int prioritySequenceCounter = 0;
 
-        for (final Entry<T, Integer> entry : weightsPerPriority.entrySet())
+        for (Entry<T, Integer> entry : weightsPerPriority.entrySet())
         {
-            final T priority = entry.getKey();
+            T priority = entry.getKey();
+            int weightPerPriority = entry.getValue() / 10;
+            Arrays.fill(prioritySequence, prioritySequenceCounter,
+                    prioritySequenceCounter + weightPerPriority, priority);
+            prioritySequenceCounter += weightPerPriority;
 
-            {
-              final int weightPerPriority = entry.getValue() / 10;
-              Arrays.fill(prioritySequence,
-                          prioritySequenceCounter,
-                          prioritySequenceCounter + weightPerPriority,
-                          priority);
-              prioritySequenceCounter += weightPerPriority;
-            }
-
-            queues.put(priority, new Lane<E>(initialQueueCapacities, prioritySequenceCounter - 1));
+            stripes.put(priority, new Stripe<E>(initialQueueCapacities,
+                    prioritySequenceCounter - 1));
         }
 
-        myQueues = queues;
+        myStripes = stripes;
         myPrioritySequence = prioritySequence;
     }
 
@@ -263,7 +244,6 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
     @Override
     public void put(E e) throws InterruptedException
     {
-        Enum<?> elementPriority = e.getElementPriority();
         myAccessLock.lockInterruptibly();
 
         try
@@ -273,9 +253,8 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
                 myNotFull.await();
             }
 
-            insertElement(e, elementPriority);
-        }
-        finally
+            insertElement(e);
+        } finally
         {
             myAccessLock.unlock();
         }
@@ -296,18 +275,16 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
     @Override
     public boolean offer(E e)
     {
-        Enum<?> elementPriority = e.getElementPriority();
         myAccessLock.lock();
 
         try
         {
             if (myCurrentSize < myTotalCapacity)
             {
-                insertElement(e, elementPriority);
+                insertElement(e);
                 return true;
             }
-        }
-        finally
+        } finally
         {
             myAccessLock.unlock();
         }
@@ -339,7 +316,6 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
     public boolean offer(E e, long timeout, TimeUnit unit)
             throws InterruptedException
     {
-        Enum<?> elementPriority = e.getElementPriority();
         long nanos = unit.toNanos(timeout);
         myAccessLock.lockInterruptibly();
 
@@ -349,15 +325,15 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
             {
                 if (myCurrentSize < myTotalCapacity)
                 {
-                    insertElement(e, elementPriority);
+                    insertElement(e);
                     return true;
                 }
             } while ((nanos = myNotFull.awaitNanos(nanos)) > 0);
-        }
-        finally
+        } finally
         {
             myAccessLock.unlock();
         }
+
         return false;
     }
 
@@ -381,9 +357,8 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
                 myNotEmpty.await();
             }
 
-            return extractElement();
-        }
-        finally
+            return extractElement(SignalPolicy.DO_SIGNAL);
+        } finally
         {
             myAccessLock.unlock();
         }
@@ -402,9 +377,9 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
 
         try
         {
-            return myCurrentSize > 0 ? extractElement() : null;
-        }
-        finally
+            return myCurrentSize > 0 ? extractElement(SignalPolicy.DO_SIGNAL)
+                    : null;
+        } finally
         {
             myAccessLock.unlock();
         }
@@ -437,14 +412,14 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
             {
                 if (myCurrentSize > 0)
                 {
-                    return extractElement();
+                    return extractElement(SignalPolicy.DO_SIGNAL);
                 }
-            } while((nanos = myNotEmpty.awaitNanos(nanos)) > 0);
-        }
-        finally
+            } while ((nanos = myNotEmpty.awaitNanos(nanos)) > 0);
+        } finally
         {
             myAccessLock.unlock();
         }
+
         return null;
     }
 
@@ -462,8 +437,7 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
         try
         {
             return myCurrentSize > 0 ? peekElement() : null;
-        }
-        finally
+        } finally
         {
             myAccessLock.unlock();
         }
@@ -482,8 +456,7 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
         try
         {
             return myCurrentSize;
-        }
-        finally
+        } finally
         {
             myAccessLock.unlock();
         }
@@ -492,8 +465,8 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
     /**
      * Returns the number of additional elements that this queue can ideally (in
      * the absence of memory constraints) accept without blocking. This is
-     * always equal to the total capacity of this queue less the current
-     * of this queue.
+     * always equal to the total capacity of this queue less the current of this
+     * queue.
      * 
      * @return The remaining capacity.
      */
@@ -501,9 +474,12 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
     public int remainingCapacity()
     {
         myAccessLock.lock();
-        try {
+
+        try
+        {
             return myTotalCapacity - myCurrentSize;
-        } finally {
+        } finally
+        {
             myAccessLock.unlock();
         }
     }
@@ -540,9 +516,9 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
 
         try
         {
-            for (Lane<E> queue : myQueues.values())
+            for (Stripe<E> stripe : myStripes.values())
             {
-                if (queue.remove(o))
+                if (stripe.remove(o))
                 {
                     --myCurrentSize;
                     myNotFull.signal();
@@ -573,9 +549,9 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
 
         try
         {
-            for (Lane<E> queue : myQueues.values())
+            for (Stripe<E> stripe : myStripes.values())
             {
-                if (queue.contains(object))
+                if (stripe.contains(object))
                 {
                     return true;
                 }
@@ -662,7 +638,7 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
             E drainedElement;
             while (numberOfDrainedElements < maxElementsToDrain
                     && myCurrentSize > 0
-                    && (drainedElement = extractElement()) != null)
+                    && (drainedElement = extractElement(SignalPolicy.NO_SIGNAL)) != null)
             {
                 collectionToDrainTo.add(drainedElement);
                 ++numberOfDrainedElements;
@@ -696,7 +672,7 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
             {
                 while (myCurrentSize > 0)
                 {
-                    extractElement();
+                    extractElement(SignalPolicy.NO_SIGNAL);
                 }
 
                 myNotFull.signalAll();
@@ -722,11 +698,11 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
     {
         List<Object[]> arraysToConcatenate = Collections.emptyList();
         myAccessLock.lock();
-        final int currentSize = myCurrentSize;
+        int currentSize = myCurrentSize;
 
         try
         {
-            arraysToConcatenate = getQueuesAsArrays();
+            arraysToConcatenate = getStripesAsArrays();
         } finally
         {
             myAccessLock.unlock();
@@ -765,16 +741,17 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
         checkNotNull(a);
         List<Object[]> arraysToConcatenate = Collections.emptyList();
         myAccessLock.lock();
-        final int currentSize = myCurrentSize;
+        int currentSize = myCurrentSize;
 
         try
         {
             if (a.length < currentSize)
             {
-                a = (T[]) Array.newInstance(a.getClass().getComponentType(), currentSize);
+                a = (T[]) Array.newInstance(a.getClass().getComponentType(),
+                        currentSize);
             }
 
-            arraysToConcatenate = getQueuesAsArrays();
+            arraysToConcatenate = getStripesAsArrays();
         } finally
         {
             myAccessLock.unlock();
@@ -799,6 +776,9 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
      * is not guaranteed to) reflect any modifications subsequent to
      * construction.
      * 
+     * Note that {@link Iterator#remove()} will always throw a
+     * {@link UnsupportedOperationException}.
+     * 
      * @return An {@link Iterator} over the elements in this queue.
      */
     @Override
@@ -808,19 +788,33 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
     }
 
     /**
+     * Returns the element's priority level, or throws a
+     * {@link ClassCastException} in case the provided object is not of type
+     * {@link StripedQueueElement}.
+     * 
+     * @param o
+     * @return
+     */
+    private static Enum<?> getElementPriority(Object o)
+    {
+        return ((StripedQueueElement) o).getElementPriority();
+    }
+
+    /**
      * Returns the internal queues as a list of arrays.
      * 
      * Must be called using mutual exclusion.
      * 
      * @return
      */
-    private ArrayList<Object[]> getQueuesAsArrays()
+    private ArrayList<Object[]> getStripesAsArrays()
     {
-        ArrayList<Object[]> arraysToConcatenate = new ArrayList<Object[]>(myQueues.size());
+        ArrayList<Object[]> arraysToConcatenate = new ArrayList<Object[]>(
+                myStripes.size());
 
-        for (Lane<E> queue : myQueues.values())
+        for (Stripe<E> stripe : myStripes.values())
         {
-            arraysToConcatenate.add(queue.toArray());
+            arraysToConcatenate.add(stripe.toArray());
         }
 
         return arraysToConcatenate;
@@ -833,8 +827,8 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
      * @param arraysToConcatenate
      * @param destination
      */
-    private static <T> void concatenateArrays(Iterable<T[]> arraysToConcatenate,
-            T[] destination)
+    private static <T> void concatenateArrays(
+            Iterable<T[]> arraysToConcatenate, T[] destination)
     {
         int nextStartIndexToUse = 0;
 
@@ -852,11 +846,11 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
      * Must be called using mutual exclusion.
      * 
      * @param element
-     * @param elementPriority
      */
-    private void insertElement(E element, Enum<?> elementPriority)
+    private void insertElement(E element)
     {
-        myQueues.get(elementPriority).addLast(element);
+        Enum<?> priority = getElementPriority(element);
+        myStripes.get(priority).addLast(element);
         ++myCurrentSize;
         myNotEmpty.signal();
     }
@@ -870,23 +864,28 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
      * 
      * @return
      */
-    private E extractElement()
+    private E extractElement(SignalPolicy signalPolicy)
     {
-        for (int i = 0; i < myQueues.size(); ++i)
+        for (int i = 0; i < myStripes.size(); ++i)
         {
-            final Lane<E> queue = myQueues.get(myPrioritySequence[myPriorityCirculation]);
-            final E element = queue.poll();
+            Stripe<E> stripe = myStripes
+                    .get(myPrioritySequence[myPriorityCirculation]);
+            E element = stripe.poll();
 
             if (element != null)
             {
                 myPriorityCirculation = stepPriorityCirculation(myPriorityCirculation);
                 --myCurrentSize;
-                myNotFull.signal();
+
+                if (signalPolicy == SignalPolicy.DO_SIGNAL)
+                {
+                    myNotFull.signal();
+                }
+
                 return element;
-            } else
-            {
-                myPriorityCirculation = stepPriorityCirculationToNextLevel(queue.getIndex());
             }
+
+            myPriorityCirculation = stepPriorityCirculationToNextLevel(stripe);
         }
 
         // Must never reach this point - caller must make sure elements exist in
@@ -905,19 +904,18 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
     private E peekElement()
     {
         int priorityCirculation = myPriorityCirculation;
-        for (int i = 0; i < myQueues.size(); ++i)
+        for (int i = 0; i < myStripes.size(); ++i)
         {
-            final Lane<E> queue = myQueues.get(myPrioritySequence[priorityCirculation]);
-            final E element = queue.peek();
+            Stripe<E> stripe = myStripes
+                    .get(myPrioritySequence[priorityCirculation]);
+            E element = stripe.peek();
 
             if (element != null)
             {
                 return element;
             }
-            else
-            {
-                priorityCirculation = stepPriorityCirculationToNextLevel(queue.getIndex());
-            }
+
+            priorityCirculation = stepPriorityCirculationToNextLevel(stripe);
         }
 
         // Must never reach this point - caller must make sure elements exist in
@@ -934,19 +932,23 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
     private static int stepPriorityCirculation(
             int currentPriorityCirculationValue)
     {
-        return (++currentPriorityCirculationValue == PRIORITY_SEQUENCE_LENGTH) ? 0 : currentPriorityCirculationValue;
+        return (++currentPriorityCirculationValue == PRIORITY_SEQUENCE_LENGTH) ? 0
+                : currentPriorityCirculationValue;
     }
 
     /**
      * Fast-forwards the priority circulation to the next priority level to
      * poll. This method is static and takes the queue's state as arguments.
      * 
-     * @param currentlyPolledPriorityEndIndex
+     * @param currentlyPolledStripe
      */
     private static int stepPriorityCirculationToNextLevel(
-            int currentlyPolledPriorityEndIndex)
+            Stripe<?> currentlyPolledStripe)
     {
-        return (currentlyPolledPriorityEndIndex == (PRIORITY_SEQUENCE_LENGTH - 1)) ? 0 : (currentlyPolledPriorityEndIndex + 1);
+        int stripeEndIndex = currentlyPolledStripe
+                .getSequenceEndIndexInPriorityCirculation();
+        return (stripeEndIndex == (PRIORITY_SEQUENCE_LENGTH - 1)) ? 0
+                : (stripeEndIndex + 1);
     }
 
     /**
@@ -1003,11 +1005,10 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
                 throw new IllegalArgumentException("Weight for " + priority
                         + " must be expressed in tenth(s) of percent (not "
                         + weight + "%)");
-            }
-            else if (weight < 0)
+            } else if (weight < 0)
             {
                 throw new IllegalArgumentException("Weight for" + priority
-                       + " must be non-negative but is " + weight + "%");
+                        + " must be non-negative (not " + weight + "%)");
             }
 
             sum += weight;
@@ -1023,16 +1024,13 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
 
     /**
      * An {@link Iterator} implementation which takes a combined snapshot of all
-     * the underlying queues/stripes.
+     * the underlying stripes.
      * 
      */
     private final class QueueIterator implements Iterator<E>
     {
-        private static final int NO_INDEX = -1;
-
         private final Object[] myArray;
         private int myCurrentIndex;
-        private int myPreviousIndex;
 
         /**
          * Creates a new {@link QueueIterator} instance.
@@ -1040,7 +1038,6 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
          */
         QueueIterator()
         {
-            myPreviousIndex = NO_INDEX;
             myArray = toArray();
         }
 
@@ -1059,55 +1056,61 @@ public class StripedBlockingQueue<E extends StripedQueueElement> extends Abstrac
                 throw new NoSuchElementException();
             }
 
-            myPreviousIndex = myCurrentIndex;
             return (E) myArray[myCurrentIndex++];
         }
 
         @Override
         public void remove()
         {
-            if (myPreviousIndex == NO_INDEX)
-            {
-                throw new IllegalStateException();
-            }
-            // This is broken, this needs to remove by index, if the same item is in the queue multiple times?
-            removeElementByIdentity(myArray[myPreviousIndex]);
-            myPreviousIndex = NO_INDEX;
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    /**
+     * An internal queue representation of a stripe in the
+     * {@link StripedBlockingQueue}.
+     * 
+     * @param <E>
+     *            The type of elements held in this collection (must be of type
+     *            {@link StripedQueueElement}).
+     */
+    private final static class Stripe<E> extends ArrayDeque<E>
+    {
+        private static final long serialVersionUID = 3397963392578506483L;
+
+        private final int mySequenceEndIndexInPriorityCirculation;
+
+        /**
+         * Creates a new {@link Stripe} instance.
+         * 
+         * @param initialCapacity
+         * @param sequenceEndIndex
+         */
+        Stripe(int initialCapacity, int sequenceEndIndex)
+        {
+            super(initialCapacity);
+            mySequenceEndIndexInPriorityCirculation = sequenceEndIndex;
         }
 
         /**
-         * Identity-based removal of the provided object. This method will be
-         * executed using mutual exclusion.
+         * Returns the end index of this stripe in the priority circulation
+         * sequence of the {@link StripedBlockingQueue}.
          * 
-         * @param objectToRemove
+         * @return
          */
-        private void removeElementByIdentity(Object objectToRemove)
+        int getSequenceEndIndexInPriorityCirculation()
         {
-            myAccessLock.lock();
-
-            try
-            {
-                queueLoop: for (Lane<E> queue : myQueues.values())
-                {
-                    Iterator<E> iterator = queue.iterator();
-
-                    while (iterator.hasNext())
-                    {
-                        E element = iterator.next();
-
-                        if (element == objectToRemove)
-                        {
-                            iterator.remove();
-                            --myCurrentSize;
-                            myNotFull.signal();
-                            break queueLoop;
-                        }
-                    }
-                }
-            } finally
-            {
-                myAccessLock.unlock();
-            }
+            return mySequenceEndIndexInPriorityCirculation;
         }
+    }
+
+    /**
+     * An enum representing the different policies when extracting elements from
+     * this queue.
+     * 
+     */
+    private static enum SignalPolicy
+    {
+        DO_SIGNAL, NO_SIGNAL,
     }
 }
